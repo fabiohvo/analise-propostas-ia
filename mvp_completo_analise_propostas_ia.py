@@ -107,7 +107,7 @@ if st.button("🔍 Analisar Propostas") and edital_file and propostas_files:
             - Recomendações
             """
 
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.4,
