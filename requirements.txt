@@ -2,4 +2,5 @@ streamlit
 PyPDF2
 docx2txt
 openai
-fpdf
+fpdf2
+sqlite3
