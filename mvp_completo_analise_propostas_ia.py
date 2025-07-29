@@ -8,70 +8,62 @@ import subprocess
 from typing import Tuple, Optional
 
 # --- CONFIGURAÇÃO DE AMBIENTE ROBUSTA ---
-def install_package(package_spec: str):
+def install_package(package_spec: str) -> bool:
     """Instala pacotes com tratamento avançado de erros"""
     package_name = package_spec.split('>=')[0]
     try:
-        # Tenta importar primeiro para verificar se já está instalado
+        # Verifica se já está instalado primeiro
         import importlib
         importlib.import_module(package_name)
+        return True
     except ImportError:
         try:
-            # Instalação silenciosa
+            # Tenta instalar com a especificação completa
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", package_spec],
                 check=True,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
+                timeout=60
             )
-        except subprocess.CalledProcessError as e:
-            st.warning(f"Falha ao instalar {package_spec}. Tentando versão mínima...")
+            return True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             try:
+                # Fallback: instala apenas o nome do pacote
                 subprocess.run(
                     [sys.executable, "-m", "pip", "install", package_name],
                     check=True,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.PIPE,
+                    timeout=60
                 )
-            except subprocess.CalledProcessError:
-                st.error(f"Não foi possível instalar {package_name}")
+                return True
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                st.warning(f"Não foi possível instalar {package_name}")
                 return False
-    return True
 
-# Lista de pacotes com fallbacks
-PACKAGES = [
-    "PyPDF2>=3.0.0,<4.0.0",  # Restringindo versão para evitar incompatibilidades
+# Lista de pacotes essenciais com fallbacks
+ESSENTIAL_PACKAGES = [
+    "pypdf>=3.0.0",  # Usando pypdf como principal (sucessor do PyPDF2)
     "docx2txt>=0.9",
     "openai>=1.12.0",
     "google-generativeai>=0.3.0",
     "fpdf2>=2.8.3",
-    "python-dotenv>=1.0.0",
-    "tiktoken>=0.5.1;python_version<'3.11'",  # Instala apenas para Python <3.11
-    "pypdf>=3.0.0"  # Fallback para PyPDF2
+    "python-dotenv>=1.0.0"
 ]
 
 # Instalação controlada
-for package in PACKAGES:
-    success = install_package(package)
-    if not success and "PyPDF2" in package:
-        st.warning("Usando pypdf como fallback para PyPDF2")
+for package in ESSENTIAL_PACKAGES:
+    if not install_package(package):
+        st.error(f"Falha crítica ao instalar {package}. O app pode não funcionar corretamente.")
 
 # --- IMPORTACOES COM FALLBACKS ---
 try:
-    # Tenta primeiro com PyPDF2
-    from PyPDF2 import PdfReader
-    try:
-        from PyPDF2 import PdfException
-    except ImportError:
-        class PdfException(Exception): pass  # Fallback para PdfException
+    from pypdf import PdfReader, PdfException  # Principal
+    st.info("Usando pypdf para leitura de PDFs")
 except ImportError:
-    try:
-        # Fallback para pypdf
-        from pypdf import PdfReader, PdfException
-        st.info("Usando pypdf em vez de PyPDF2")
-    except ImportError as e:
-        st.error("Nenhuma biblioteca PDF disponível!")
-        st.stop()
+    st.error("Biblioteca pypdf é obrigatória. O app não pode continuar.")
+    st.stop()
 
 try:
     import docx2txt
@@ -79,19 +71,8 @@ try:
     import google.generativeai as genai
     from fpdf import FPDF
     from dotenv import load_dotenv
-    
-    # Tenta importar tiktoken apenas se Python < 3.11
-    if sys.version_info < (3, 11):
-        try:
-            import tiktoken
-        except ImportError:
-            st.warning("tiktoken não disponível - usando contagem simples de tokens")
-            tiktoken = None
-    else:
-        tiktoken = None
-        st.info("Python 3.11+ detectado - tiktoken não é necessário")
 except ImportError as e:
-    st.error(f"FALHA NAS IMPORTAÇÕES: {str(e)}")
+    st.error(f"FALHA NAS IMPORTAÇÕES ESSENCIAIS: {str(e)}")
     st.stop()
 
 # --- CONSTANTES ---
@@ -103,9 +84,8 @@ TIMEOUT_ANALISE = 300  # 5 minutos
 class AnalisadorContratos:
     def _init_(self):
         self.servicos = self._iniciar_servicos()
-        self._setup_tokenizer()
     
-    def _iniciar_servicos(self):
+    def _iniciar_servicos(self) -> dict:
         """Inicializa serviços de IA com fallback"""
         servicos = {}
         load_dotenv()
@@ -131,31 +111,140 @@ class AnalisadorContratos:
             st.warning(f"Gemini não disponível: {str(e)}")
         
         if not servicos:
-            raise Exception("Nenhum serviço de IA disponível")
+            st.error("Nenhum serviço de IA disponível. Configure pelo menos uma API.")
         return servicos
-    
-    def _setup_tokenizer(self):
-        """Configura tokenizador com fallback"""
-        self.tokenizer = None
-        if tiktoken:
-            try:
-                self.tokenizer = tiktoken.get_encoding("cl100k_base")
-            except:
-                pass
-    
-    def contar_tokens(self, texto: str) -> int:
-        """Conta tokens com fallback para len() se tiktoken falhar"""
-        if self.tokenizer:
-            return len(self.tokenizer.encode(texto))
-        return len(texto.split())  # Fallback aproximado
 
-# ... [Restante do código permanece idêntico ao anterior] ...
+# --- FUNÇÕES PRINCIPAIS ---
+def ler_arquivo(file) -> str:
+    """Lê PDF ou DOCX com tratamento robusto de erros"""
+    try:
+        if not file:
+            raise ValueError("Nenhum arquivo fornecido")
+        
+        if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise ValueError(f"Arquivo excede o limite de {MAX_FILE_SIZE_MB}MB")
+        
+        if file.name.endswith('.pdf'):
+            reader = PdfReader(file)
+            text = "\n".join([page.extract_text() or "" for page in reader.pages])
+        elif file.name.endswith('.docx'):
+            text = docx2txt.process(file)
+        else:
+            raise ValueError("Formato de arquivo não suportado")
+        
+        if not text.strip():
+            raise ValueError("Arquivo sem texto legível")
+        
+        return text[:MAX_TOKENS]  # Limita o tamanho
+    
+    except PdfException as e:
+        raise ValueError(f"Erro na leitura do PDF: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Erro ao processar arquivo: {str(e)}")
+
+def analisar_contrato(contrato_base: str, proposta: str, nome_proposta: str) -> Tuple[str, str]:
+    """Realiza análise de conformidade contratual"""
+    analisador = AnalisadorContratos()
+    
+    # Pré-processamento
+    contrato_base = contrato_base[:50000]  # Limita o tamanho
+    proposta = proposta[:50000]
+    
+    prompt = f"""
+    [ANÁLISE CONTRATUAL PROFISSIONAL]
+    Compare rigorosamente esta proposta com o contrato base:
+
+    CONTRATO BASE:
+    {contrato_base}
+
+    PROPOSTA ({nome_proposta}):
+    {proposta}
+
+    Forneça:
+    1. Conformidade geral (0-100%)
+    2. Itens atendidos/parcialmente/não atendidos
+    3. Riscos contratuais
+    4. Recomendações específicas
+    """
+    
+    # Tenta OpenAI primeiro
+    if "openai" in analisador.servicos:
+        try:
+            response = analisador.servicos["openai"].chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=4000
+            )
+            return response.choices[0].message.content, "GPT-4 Turbo"
+        except Exception as e:
+            st.warning(f"OpenAI falhou: {str(e)}")
+    
+    # Fallback para Gemini
+    if "gemini" in analisador.servicos:
+        try:
+            model = genai.GenerativeModel('gemini-1.5-pro-latest')
+            response = model.generate_content(prompt)
+            return response.text, "Gemini 1.5 Pro"
+        except Exception as e:
+            st.warning(f"Gemini falhou: {str(e)}")
+    
+    raise Exception("Todos os serviços de IA falharam")
+
+# --- INTERFACE STREAMLIT ---
+def main():
+    st.set_page_config(
+        page_title="Analisador Contratual",
+        page_icon="📄",
+        layout="wide"
+    )
+    
+    st.title("🔍 Analisador de Conformidade Contratual")
+    st.write("Compare propostas comerciais com contratos base usando IA")
+    
+    # Upload de arquivos
+    with st.expander("📤 Upload de Documentos", expanded=True):
+        contrato_base = st.file_uploader("Contrato Base (PDF/DOCX)", type=["pdf", "docx"])
+        propostas = st.file_uploader("Propostas (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
+    
+    # Análise
+    if st.button("Analisar Propostas", type="primary") and contrato_base and propostas:
+        try:
+            with st.spinner("Processando contrato base..."):
+                texto_base = ler_arquivo(contrato_base)
+            
+            for proposta in propostas:
+                try:
+                    with st.spinner(f"Analisando {proposta.name}..."):
+                        texto_proposta = ler_arquivo(proposta)
+                        analise, modelo = analisar_contrato(texto_base, texto_proposta, proposta.name)
+                        
+                        with st.container():
+                            st.subheader(f"Resultado: {proposta.name}")
+                            st.markdown(analise)
+                            
+                            # Gerar PDF
+                            pdf = FPDF()
+                            pdf.add_page()
+                            pdf.set_font("Arial", size=10)
+                            pdf.multi_cell(0, 8, analise)
+                            pdf_bytes = pdf.output(dest="S").encode("latin1")
+                            
+                            st.download_button(
+                                "Baixar Relatório",
+                                data=pdf_bytes,
+                                file_name=f"Analise_{proposta.name}.pdf",
+                                mime="application/pdf"
+                            )
+                
+                except Exception as e:
+                    st.error(f"Erro na proposta {proposta.name}: {str(e)}")
+                    continue
+            
+            st.success("Análise concluída com sucesso!")
+        
+        except Exception as e:
+            st.error(f"Erro crítico: {str(e)}")
 
 if _name_ == "_main_":
-    try:
-        main()
-    except Exception as e:
-        st.error("ERRO INESPERADO NO SISTEMA")
-        with st.expander("Detalhes técnicos (para suporte)"):
-            st.exception(e)
-        st.info("Por favor, tente novamente ou contate o administrador")
+    main()
