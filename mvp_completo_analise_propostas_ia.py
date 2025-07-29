@@ -9,14 +9,6 @@ from datetime import datetime
 
 from openai import OpenAI
 
-client = OpenAI()
-
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": prompt}],
-    temperature=0.4,
-)
-
 # Configuração da OpenAI
 
 openai.api_key = st.secrets["openai"]["api_key"]
