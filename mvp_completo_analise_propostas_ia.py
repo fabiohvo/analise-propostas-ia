@@ -7,6 +7,16 @@ from fpdf import FPDF
 import sqlite3
 from datetime import datetime
 
+from openai import OpenAI
+
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0.4,
+)
+
 # Configuração da OpenAI
 
 openai.api_key = st.secrets["openai"]["api_key"]
@@ -138,5 +148,5 @@ conn.close()
 
 for nome, score, data in historico:
     t.sidebar.write(f"*{nome}*")
-st.sidebar.write(f"- {score}")
-st.sidebar.write(f"- {data}")
+    st.sidebar.write(f"- {score}")
+    st.sidebar.write(f"- {data}")
