@@ -3,14 +3,14 @@ import sqlite3
 from datetime import datetime
 import os
 import time
-from dotenv import load_dotenv
 import sys
 import subprocess
 
-# --- Verificação e Instalação de Dependências ---
+# --- Correção do Import Automático ---
 def install_if_missing(package):
+    """Instala pacotes ausentes automaticamente"""
     try:
-        _import_(package)
+        _import_(package)  # Note os dois underscores
     except ImportError:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
@@ -24,15 +24,17 @@ REQUIRED_PACKAGES = [
     "python-dotenv>=1.0.0"
 ]
 
+# Instala dependências faltantes
 for package in REQUIRED_PACKAGES:
     install_if_missing(package.split('>=')[0])
 
-# --- Importações Garantidas ---
+# --- Importações Pós-Instalação ---
 from PyPDF2 import PdfReader, PdfException
 import docx2txt
 from openai import OpenAI
 import google.generativeai as genai
 from fpdf import FPDF
+from dotenv import load_dotenv
 
 # --- Configuração Inicial ---
 st.set_page_config(
@@ -42,11 +44,10 @@ st.set_page_config(
 )
 load_dotenv()
 
-# --- Constantes ---
+# --- Restante do Código Original Funcional ---
 MAX_FILE_SIZE_MB = 10
 MAX_TOKENS = 8000
 
-# --- Inicialização de Serviços ---
 def init_services():
     services = {}
     try:
@@ -66,93 +67,8 @@ def init_services():
 
 services = init_services()
 
-# --- Funções Principais (Mantidas como estavam) ---
-def read_pdf(file):
-    try:
-        if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
+# ... (mantenha todas as outras funções exatamente como estavam) ...
 
-        reader = PdfReader(file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        
-        if not text.strip():
-            raise ValueError("PDF não contém texto legível")
-        
-        return text[:MAX_TOKENS]
-    except Exception as e:
-        raise ValueError(f"Erro no PDF: {str(e)}")
-
-def read_docx(file):
-    try:
-        if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
-        
-        text = docx2txt.process(file)
-        if not text.strip():
-            raise ValueError("DOCX vazio ou sem texto legível")
-        
-        return text[:MAX_TOKENS]
-    except Exception as e:
-        raise ValueError(f"Erro no DOCX: {str(e)}")
-
-def read_file(file):
-    if not file:
-        raise ValueError("Nenhum arquivo fornecido")
-    
-    try:
-        if file.name.endswith(".pdf"):
-            return read_pdf(file)
-        elif file.name.endswith(".docx"):
-            return read_docx(file)
-        else:
-            raise ValueError("Formato não suportado")
-    except Exception as e:
-        raise ValueError(f"Erro ao processar {file.name}: {str(e)}")
-
-# --- Análise com IA (Mantida como estava) ---
-def analyze_with_openai(prompt, model="gpt-4-turbo-preview"):
-    try:
-        response = services["openai"].chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt[:MAX_TOKENS]}],
-            temperature=0.4
-        )
-        return response.choices[0].message.content, "openai"
-    except Exception as e:
-        if model != "gpt-3.5-turbo":
-            return analyze_with_openai(prompt, "gpt-3.5-turbo")
-        raise
-
-def analyze_with_gemini(prompt):
-    try:
-        model = services["gemini"].GenerativeModel('gemini-1.5-pro-latest')
-        response = model.generate_content(prompt[:MAX_TOKENS])
-        return response.text, "gemini"
-    except Exception as e:
-        raise
-
-def safe_analyze(prompt):
-    error_log = []
-    providers = [
-        ("openai", analyze_with_openai),
-        ("gemini", analyze_with_gemini)
-    ]
-    
-    for provider_name, analyzer in providers:
-        if provider_name not in services:
-            continue
-            
-        try:
-            return analyzer(prompt)
-        except Exception as e:
-            error_log.append(f"{provider_name}: {str(e)}")
-            time.sleep(2)
-    
-    raise Exception("Todos os provedores falharam")
-
-# --- Interface do Usuário (Mantida como estava) ---
 def main():
     st.title("📊 Analisador de Propostas com IA")
     
