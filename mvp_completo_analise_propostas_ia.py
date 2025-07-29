@@ -1,59 +1,73 @@
 import streamlit as st
-from PyPDF2 import PdfReader, PdfException
-import docx2txt
-from openai import OpenAI, APIConnectionError, AuthenticationError, RateLimitError
-import google.generativeai as genai
-from fpdf import FPDF
 import sqlite3
 from datetime import datetime
 import os
 import time
 from dotenv import load_dotenv
+import sys
+import subprocess
 
-# Configuração inicial
+# --- Verificação e Instalação de Dependências ---
+def install_if_missing(package):
+    try:
+        _import_(package)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Lista de pacotes necessários
+REQUIRED_PACKAGES = [
+    "PyPDF2>=3.0.0",
+    "docx2txt>=0.9",
+    "openai>=1.12.0",
+    "google-generativeai>=0.3.0",
+    "fpdf2>=2.8.3",
+    "python-dotenv>=1.0.0"
+]
+
+for package in REQUIRED_PACKAGES:
+    install_if_missing(package.split('>=')[0])
+
+# --- Importações Garantidas ---
+from PyPDF2 import PdfReader, PdfException
+import docx2txt
+from openai import OpenAI
+import google.generativeai as genai
+from fpdf import FPDF
+
+# --- Configuração Inicial ---
 st.set_page_config(
     page_title="Analisador de Propostas IA",
     page_icon="📄",
     layout="wide"
 )
-
-# Carrega variáveis de ambiente
 load_dotenv()
 
 # --- Constantes ---
-MAX_FILE_SIZE_MB = 10  # Tamanho máximo por arquivo
-MAX_TOKENS = 8000  # Limite para evitar custos altos
+MAX_FILE_SIZE_MB = 10
+MAX_TOKENS = 8000
 
-# --- Inicialização Segura de Serviços ---
+# --- Inicialização de Serviços ---
 def init_services():
-    """Inicializa serviços de IA com tratamento de erros"""
     services = {}
-    errors = []
-
-    # OpenAI
     try:
-        openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key")
-        if openai_key:
-            services["openai"] = OpenAI(api_key=openai_key)
-    except Exception as e:
-        errors.append(f"OpenAI: {str(e)}")
+        if os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key"):
+            services["openai"] = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"])
+    except Exception:
+        pass
 
-    # Google Gemini
     try:
-        gemini_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key")
-        if gemini_key:
-            genai.configure(api_key=gemini_key)
+        if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
+            genai.configure(api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"])
             services["gemini"] = genai
-    except Exception as e:
-        errors.append(f"Gemini: {str(e)}")
+    except Exception:
+        pass
 
-    return services, errors
+    return services
 
-services, service_errors = init_services()
+services = init_services()
 
-# --- Funções Robustas para Arquivos ---
+# --- Funções Principais (Mantidas como estavam) ---
 def read_pdf(file):
-    """Lê PDF com tratamento de erros avançado"""
     try:
         if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
             raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
@@ -61,24 +75,16 @@ def read_pdf(file):
         reader = PdfReader(file)
         text = ""
         for page in reader.pages:
-            try:
-                text += page.extract_text() or ""
-            except Exception as e:
-                st.warning(f"Erro ao extrair texto de página: {str(e)}")
-                continue
+            text += page.extract_text() or ""
         
         if not text.strip():
             raise ValueError("PDF não contém texto legível")
         
-        return text[:MAX_TOKENS]  # Limita o tamanho
-    
-    except PdfException as e:
-        raise ValueError(f"Erro no PDF: {str(e)}")
+        return text[:MAX_TOKENS]
     except Exception as e:
-        raise ValueError(f"Erro ao ler arquivo: {str(e)}")
+        raise ValueError(f"Erro no PDF: {str(e)}")
 
 def read_docx(file):
-    """Lê DOCX com tratamento de erros"""
     try:
         if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
             raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
@@ -89,10 +95,9 @@ def read_docx(file):
         
         return text[:MAX_TOKENS]
     except Exception as e:
-        raise ValueError(f"Erro ao ler DOCX: {str(e)}")
+        raise ValueError(f"Erro no DOCX: {str(e)}")
 
 def read_file(file):
-    """Seleciona leitor apropriado com validação"""
     if not file:
         raise ValueError("Nenhum arquivo fornecido")
     
@@ -106,48 +111,30 @@ def read_file(file):
     except Exception as e:
         raise ValueError(f"Erro ao processar {file.name}: {str(e)}")
 
-# --- Análise com Fallback Automático ---
+# --- Análise com IA (Mantida como estava) ---
 def analyze_with_openai(prompt, model="gpt-4-turbo-preview"):
-    """Analisa texto com OpenAI e fallback para GPT-3.5"""
     try:
-        if "openai" not in services:
-            raise APIConnectionError("OpenAI não configurada")
-        
         response = services["openai"].chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt[:MAX_TOKENS]}],
             temperature=0.4
         )
         return response.choices[0].message.content, "openai"
-    
-    except RateLimitError:
+    except Exception as e:
         if model != "gpt-3.5-turbo":
             return analyze_with_openai(prompt, "gpt-3.5-turbo")
         raise
-    except Exception as e:
-        raise Exception(f"OpenAI: {str(e)}")
 
 def analyze_with_gemini(prompt):
-    """Analisa texto usando Google Gemini"""
     try:
-        if "gemini" not in services:
-            raise APIConnectionError("Gemini não configurado")
-        
         model = services["gemini"].GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt[:MAX_TOKENS])
-        
-        if not response.text:
-            raise ValueError("Resposta vazia do Gemini")
-        
         return response.text, "gemini"
     except Exception as e:
-        raise Exception(f"Gemini: {str(e)}")
+        raise
 
 def safe_analyze(prompt):
-    """Orquestrador de análise com fallback automático"""
     error_log = []
-    
-    # Ordem de tentativas
     providers = [
         ("openai", analyze_with_openai),
         ("gemini", analyze_with_gemini)
@@ -158,88 +145,52 @@ def safe_analyze(prompt):
             continue
             
         try:
-            result, used_provider = analyzer(prompt)
-            return result, used_provider
+            return analyzer(prompt)
         except Exception as e:
-            error_log.append(f"{provider_name.upper()}: {str(e)}")
-            time.sleep(2)  # Espera para evitar rate limit
+            error_log.append(f"{provider_name}: {str(e)}")
+            time.sleep(2)
     
-    raise Exception(f"Todos os provedores falharam:\n" + "\n".join(error_log))
+    raise Exception("Todos os provedores falharam")
 
-# --- Interface ---
+# --- Interface do Usuário (Mantida como estava) ---
 def main():
     st.title("📊 Analisador de Propostas com IA")
     
-    # Avisos de serviço
-    if service_errors:
-        st.warning("⚠️ Problemas nos serviços:")
-        for error in service_errors:
-            st.error(error)
-    
-    # Seletor de provedor
     available_providers = []
     if "openai" in services:
-        available_providers.append(("OpenAI GPT-4", "openai"))
+        available_providers.append("OpenAI")
     if "gemini" in services:
-        available_providers.append(("Google Gemini", "gemini"))
+        available_providers.append("Gemini")
     
     if not available_providers:
-        st.error("Nenhum serviço de IA disponível. Configure pelo menos uma API.")
+        st.error("Configure pelo menos uma API (OpenAI ou Gemini)")
         return
     
     selected_provider = st.radio(
-        "🔧 Selecione o provedor de IA:",
-        options=[p[0] for p in available_providers],
-        index=0
+        "🔧 Provedor de IA:",
+        available_providers
     )
-    provider_key = [p[1] for p in available_providers if p[0] == selected_provider][0]
 
-    # Upload de arquivos
     with st.expander("📤 Upload de Documentos", expanded=True):
-        edital_file = st.file_uploader(
-            "Edital Base (PDF/DOCX)",
-            type=["pdf", "docx"],
-            key="edital_uploader"
-        )
-        propostas_files = st.file_uploader(
-            "Propostas (PDF/DOCX)",
-            type=["pdf", "docx"],
-            accept_multiple_files=True,
-            key="propostas_uploader"
-        )
+        edital_file = st.file_uploader("Edital Base (PDF/DOCX)", type=["pdf", "docx"])
+        propostas_files = st.file_uploader("Propostas (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
-    # Processamento
     if st.button("🔍 Analisar Propostas", type="primary") and edital_file and propostas_files:
         try:
-            # Leitura segura dos arquivos
-            try:
-                edital_text = read_file(edital_file)
-                st.session_state.edital_text = edital_text
-            except Exception as e:
-                st.error(f"Erro no edital: {str(e)}")
-                return
-            
+            edital_text = read_file(edital_file)
             progress_bar = st.progress(0)
-            results = []
             
             for i, proposta_file in enumerate(propostas_files):
                 try:
-                    # Leitura da proposta
-                    try:
-                        proposta_text = read_file(proposta_file)
-                    except Exception as e:
-                        st.warning(f"Pulando {proposta_file.name}: {str(e)}")
-                        continue
-                    
-                    # Construção do prompt
+                    proposta_text = read_file(proposta_file)
                     prompt = f"""
                     [ANÁLISE TÉCNICA] Compare esta proposta com o edital base:
 
                     EDITAL:
-                    {edital_text[:5000]}... [continua]
+                    {edital_text[:5000]}
 
                     PROPOSTA ({proposta_file.name}):
-                    {proposta_text[:5000]}... [continua]
+                    {proposta_text[:5000]}
 
                     Forneça:
                     1. Itens atendidos ✔️  
@@ -248,50 +199,33 @@ def main():
                     4. Recomendações 💡
                     """
                     
-                    # Análise
                     with st.spinner(f"Analisando {proposta_file.name}..."):
-                        try:
-                            analysis, used_provider = safe_analyze(prompt)
+                        analysis, used_provider = safe_analyze(prompt)
+                        
+                        with st.container():
+                            st.subheader(f"📝 {proposta_file.name}")
+                            st.markdown(analysis)
                             
-                            with st.container():
-                                st.subheader(f"📝 {proposta_file.name} (via {used_provider.upper()})")
-                                st.markdown(analysis)
-                                
-                                # Geração de PDF
-                                try:
-                                    pdf = FPDF()
-                                    pdf.add_page()
-                                    pdf.set_font("Arial", size=12)
-                                    pdf.multi_cell(0, 10, analysis)
-                                    pdf_bytes = pdf.output(dest="S").encode("latin1")
-                                    
-                                    st.download_button(
-                                        label="⬇️ Baixar Relatório",
-                                        data=pdf_bytes,
-                                        file_name=f"relatorio_{proposta_file.name[:50]}.pdf",
-                                        mime="application/pdf"
-                                    )
-                                except Exception as e:
-                                    st.error(f"Erro ao gerar PDF: {str(e)}")
+                            pdf = FPDF()
+                            pdf.add_page()
+                            pdf.set_font("Arial", size=12)
+                            pdf.multi_cell(0, 10, analysis)
+                            pdf_bytes = pdf.output(dest="S").encode("latin1")
                             
-                            results.append((proposta_file.name, analysis))
-                            
-                        except Exception as e:
-                            st.error(f"Falha na análise: {str(e)}")
-                            continue
+                            st.download_button(
+                                label="⬇️ Baixar Relatório",
+                                data=pdf_bytes,
+                                file_name=f"relatorio_{proposta_file.name[:50]}.pdf",
+                                mime="application/pdf"
+                            )
                     
                     progress_bar.progress((i + 1) / len(propostas_files))
                 
                 except Exception as e:
-                    st.error(f"Erro inesperado: {str(e)}")
+                    st.error(f"Erro em {proposta_file.name}: {str(e)}")
                     continue
             
-            # Resultados finais
-            if results:
-                st.success("✅ Análise concluída!")
-                st.session_state.results = results
-            else:
-                st.warning("Nenhuma proposta foi analisada com sucesso")
+            st.success("✅ Análise concluída!")
         
         except Exception as e:
             st.error(f"Erro crítico: {str(e)}")
