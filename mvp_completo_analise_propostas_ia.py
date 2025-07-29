@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 
 # Configuração da OpenAI
-openai.api_key = "SUA_API_AQUI"
+openai.api_key = st.secrets["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"]
 
 # Inicializar banco de dados SQLite
 def init_db():
@@ -136,6 +136,6 @@ historico = c.fetchall()
 conn.close()
 
 for nome, score, data in historico:
-    st.sidebar.write(f"**{nome}**
-- {score}
-- {data}")
+    t.sidebar.write(f"*{nome}*")
+st.sidebar.write(f"- {score}")
+st.sidebar.write(f"- {data}")
