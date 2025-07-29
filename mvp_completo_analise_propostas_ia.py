@@ -8,7 +8,8 @@ import sqlite3
 from datetime import datetime
 
 # Configuração da OpenAI
-openai.api_key = st.secrets["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"]
+
+openai.api_key = st.secrets["openai"]["api_key"]
 
 # Inicializar banco de dados SQLite
 def init_db():
