@@ -12,6 +12,7 @@ from openai import OpenAI
 # Configuração da OpenAI
 
 openai.api_key = st.secrets["openai"]["api_key"]
+client = OpenAI(api_key=openai.api_key)
 
 # Inicializar banco de dados SQLite
 def init_db():
