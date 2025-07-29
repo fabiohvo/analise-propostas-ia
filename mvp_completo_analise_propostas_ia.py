@@ -1,16 +1,12 @@
-
 import streamlit as st
 from PyPDF2 import PdfReader
 import docx2txt
-import openai
+from openai import OpenAI
 from fpdf import FPDF
 import sqlite3
 from datetime import datetime
 
-from openai import OpenAI
-
 # Configuração da OpenAI
-
 openai_api_key = st.secrets["openai"]["api_key"]
 client = OpenAI(api_key=openai_api_key)
 
@@ -114,7 +110,7 @@ if st.button("🔍 Analisar Propostas") and edital_file and propostas_files:
                 temperature=0.4,
             )
 
-            resultado = response['choices'][0]['message']['content']
+            resultado = response.choices[0].message.content  # Corrigido aqui
             st.subheader(f"📋 Resultado da Análise: {proposta_file.name}")
             st.write(resultado)
 
@@ -140,6 +136,6 @@ historico = c.fetchall()
 conn.close()
 
 for nome, score, data in historico:
-    t.sidebar.write(f"*{nome}*")
+    st.sidebar.write(f"{nome}")  # Corrigido aqui (era 't.sidebar')
     st.sidebar.write(f"- {score}")
     st.sidebar.write(f"- {data}")
