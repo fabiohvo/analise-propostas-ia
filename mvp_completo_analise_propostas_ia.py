@@ -2,243 +2,198 @@ import streamlit as st
 from PyPDF2 import PdfReader
 import docx2txt
 from openai import OpenAI
+import google.generativeai as genai
 from fpdf import FPDF
 import sqlite3
 from datetime import datetime
 import os
+import time
 from dotenv import load_dotenv
 
 # Configuração inicial
-st.set_page_config(page_title="Analisador de Propostas com IA", page_icon="📄")
-
-# Carregar variáveis de ambiente (para desenvolvimento local)
+st.set_page_config(page_title="Analisador de Propostas IA", page_icon="📄", layout="wide")
 load_dotenv()
 
-# Inicialização da OpenAI com tratamento robusto
-try:
-    openai_api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key", "")
+# --- Constantes ---
+MODEL_DISPLAY_NAMES = {
+    "openai-gpt-4": "GPT-4 Turbo (OpenAI)",
+    "openai-gpt-3.5": "GPT-3.5 Turbo (OpenAI)",
+    "gemini-1.5": "Gemini 1.5 Pro (Google)",
+    "llama3-70b": "Llama 3 70B (Ollama)"
+}
+
+# --- Inicialização de Serviços ---
+def init_services():
+    """Inicializa todos os serviços de IA com fallback"""
+    services = {}
     
-    if not openai_api_key:
-        st.error("🔒 Chave API da OpenAI não configurada")
-        st.info("Por favor, configure a chave API nas Secrets do Streamlit ou no arquivo .env")
-        st.stop()
-    
-    client = OpenAI(api_key=openai_api_key)
-    
-    # Verificação opcional dos modelos disponíveis
+    # OpenAI
     try:
-        available_models = [model.id for model in client.models.list().data]
-        st.session_state.available_models = available_models
-    except:
-        st.session_state.available_models = []
+        if os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key"):
+            services["openai"] = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"])
+    except Exception as e:
+        st.warning(f"OpenAI não configurada: {str(e)}")
+
+    # Google Gemini
+    try:
+        if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
+            genai.configure(api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"])
+            services["gemini"] = genai
+    except Exception as e:
+        st.warning(f"Gemini não configurado: {str(e)}")
+
+    return services
+
+services = init_services()
+
+# --- Funções de Análise ---
+def analyze_with_openai(prompt, model="gpt-4-turbo-preview"):
+    """Analisa texto usando OpenAI com fallback automático"""
+    try:
+        response = services["openai"].chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4
+        )
+        return response.choices[0].message.content, f"openai-{model}"
+    except Exception as e:
+        if "gpt-4" in model:
+            return analyze_with_openai(prompt, "gpt-3.5-turbo")  # Fallback para GPT-3.5
+        raise e
+
+def analyze_with_gemini(prompt):
+    """Analisa texto usando Google Gemini"""
+    try:
+        model = services["gemini"].GenerativeModel('gemini-1.5-pro-latest')
+        response = model.generate_content(prompt)
+        return response.text, "gemini-1.5"
+    except Exception as e:
+        raise Exception(f"Erro no Gemini: {str(e)}")
+
+def analyze_with_fallback(prompt, selected_model):
+    """Orquestrador de análise com fallback automático"""
+    try:
+        if "openai" in selected_model:
+            model_name = selected_model.split("-")[-1]
+            return analyze_with_openai(prompt, model_name)
         
-except Exception as e:
-    st.error(f"Erro na configuração da API OpenAI: {str(e)}")
-    st.stop()
-
-# Inicializar banco de dados SQLite
-def init_db():
-    try:
-        conn = sqlite3.connect("historico.db")
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS analises (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proposta_nome TEXT,
-                score TEXT,
-                data TEXT,
-                parecer TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        st.error(f"Erro ao inicializar banco de dados: {str(e)}")
-
-init_db()
-
-# Funções auxiliares com tratamento de erros
-def read_pdf(file):
-    try:
-        reader = PdfReader(file)
-        text = ""
-        for page in reader.pages:
-            page_text = page.extract_text() or ""
-            text += page_text
-        return text
-    except Exception as e:
-        st.error(f"Erro ao ler PDF: {str(e)}")
-        return ""
-
-def read_docx(file):
-    try:
-        return docx2txt.process(file)
-    except Exception as e:
-        st.error(f"Erro ao ler DOCX: {str(e)}")
-        return ""
-
-def read_file(file):
-    if not file:
-        return ""
-    
-    try:
-        if file.name.endswith(".pdf"):
-            return read_pdf(file)
-        elif file.name.endswith(".docx"):
-            return read_docx(file)
+        elif "gemini" in selected_model:
+            return analyze_with_gemini(prompt)
+            
         else:
-            st.warning(f"Formato de arquivo não suportado: {file.name}")
-            return ""
+            raise Exception("Modelo não implementado")
+            
     except Exception as e:
-        st.error(f"Erro ao processar arquivo: {str(e)}")
-        return ""
-
-def salvar_historico(nome, score, parecer):
-    try:
-        conn = sqlite3.connect("historico.db")
-        c = conn.cursor()
-        c.execute("INSERT INTO analises (proposta_nome, score, data, parecer) VALUES (?, ?, ?, ?)",
-                (nome, score, datetime.now().strftime("%Y-%m-%d %H:%M"), parecer))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        st.error(f"Erro ao salvar no histórico: {str(e)}")
-
-class PDFReport(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 12)
-        self.cell(0, 10, "Relatório de Análise de Proposta", 0, 1, "C")
-        self.ln(10)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
-
-    def add_analysis(self, proposta_nome, conteudo):
-        self.set_font("Arial", "B", 11)
-        self.multi_cell(0, 10, f"📄 Proposta: {proposta_nome}", 0)
-        self.set_font("Arial", "", 10)
-        self.multi_cell(0, 8, conteudo)
-        self.ln(5)
-
-# Interface Streamlit
-st.title("📄 Analisador de Propostas com IA")
-st.write("Compare múltiplas propostas com um edital base e gere relatórios automáticos.")
-
-# Seção de upload de arquivos
-with st.expander("📤 Upload de Arquivos", expanded=True):
-    edital_file = st.file_uploader("Edital Base (PDF ou DOCX)", type=["pdf", "docx"], key="edital")
-    propostas_files = st.file_uploader("Propostas para Análise", type=["pdf", "docx"], 
-                                     accept_multiple_files=True, key="propostas")
-
-# Modelo seleção (se houver modelos disponíveis)
-if hasattr(st.session_state, 'available_models') and st.session_state.available_models:
-    modelo_selecionado = st.selectbox(
-        "Selecione o modelo de IA:",
-        options=st.session_state.available_models,
-        index=0
-    )
-else:
-    modelo_selecionado = "gpt-4-turbo-preview"  # Fallback
-
-if st.button("🔍 Analisar Propostas", type="primary") and edital_file and propostas_files:
-    with st.spinner("Analisando propostas com IA..."):
-        edital_text = read_file(edital_file)
+        st.error(f"Erro no modelo primário: {str(e)}")
+        st.warning("Tentando fallback automático...")
         
-        if not edital_text:
-            st.error("Não foi possível ler o conteúdo do edital")
-            st.stop()
+        # Ordem de fallback
+        fallback_sequence = [
+            "openai-gpt-3.5",
+            "gemini-1.5"
+        ]
         
-        for proposta_file in propostas_files:
+        for model in fallback_sequence:
             try:
-                proposta_text = read_file(proposta_file)
-                
-                if not proposta_text:
-                    st.warning(f"Não foi possível ler o conteúdo da proposta: {proposta_file.name}")
-                    continue
-                
-                prompt = f"""
-                Você é um avaliador técnico de propostas em licitações. Compare a proposta abaixo com o edital base.
-                Encontre itens não atendidos, promessas vagas, omissões e gere um parecer final com score de conformidade.
-
-                EDITAL BASE:
-                {edital_text}
-
-                PROPOSTA RECEBIDA ({proposta_file.name}):
-                {proposta_text}
-
-                Responda no formato:
-                - Itens atendidos
-                - Itens não atendidos ou vagos
-                - Score geral (0 a 100%)
-                - Recomendações
-                """
-
-                try:
-                    response = client.chat.completions.create(
-                        model=modelo_selecionado,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.4,
-                    )
-                    resultado = response.choices[0].message.content
-                    
-                    with st.container():
-                        st.subheader(f"📋 Resultado: {proposta_file.name}")
-                        st.markdown(resultado)
-                        
-                        # Gerar PDF
-                        try:
-                            report = PDFReport()
-                            report.add_page()
-                            report.add_analysis(proposta_file.name, resultado)
-                            pdf_file_name = f"relatorio_{proposta_file.name.replace(' ', '_')}.pdf"
-                            report.output(pdf_file_name)
-                            
-                            with open(pdf_file_name, "rb") as f:
-                                st.download_button(
-                                    label="📥 Baixar Relatório",
-                                    data=f,
-                                    file_name=pdf_file_name,
-                                    mime="application/pdf"
-                                )
-                        except Exception as e:
-                            st.error(f"Erro ao gerar PDF: {str(e)}")
-                        
-                        # Extrair score e salvar histórico
-                        score_linha = next((l for l in resultado.splitlines() if "Score geral" in l), "Score geral: N/A")
-                        salvar_historico(proposta_file.name, score_linha, resultado)
-                        
-                except Exception as e:
-                    st.error(f"Erro na API OpenAI ao analisar {proposta_file.name}: {str(e)}")
-                    continue
-                    
-            except Exception as e:
-                st.error(f"Erro ao processar {proposta_file.name}: {str(e)}")
+                return analyze_with_fallback(prompt, model)
+            except:
                 continue
+                
+        raise Exception("Todos os fallbacks falharam")
 
-# Seção de histórico
-st.sidebar.header("📊 Histórico de Análises")
-try:
-    conn = sqlite3.connect("historico.db")
-    c = conn.cursor()
-    c.execute("SELECT proposta_nome, score, data FROM analises ORDER BY data DESC LIMIT 10")
-    historico = c.fetchall()
-    conn.close()
+# --- Interface ---
+st.title("📊 Analisador Avançado de Propostas")
+st.caption("Compare propostas com edital base usando diferentes modelos de IA")
+
+# Seletor de Modelo
+available_models = []
+if "openai" in services:
+    available_models.extend(["openai-gpt-4", "openai-gpt-3.5"])
+if "gemini" in services:
+    available_models.append("gemini-1.5")
+
+selected_model = st.selectbox(
+    "🔧 Selecione o modelo de IA:",
+    options=available_models,
+    format_func=lambda x: MODEL_DISPLAY_NAMES.get(x, x),
+    help="GPT-4 oferece melhores análises mas custa mais"
+)
+
+# Upload de arquivos
+with st.expander("📤 Upload de Documentos", expanded=True):
+    edital_file = st.file_uploader("Edital Base (PDF/DOCX)", type=["pdf", "docx"])
+    propostas_files = st.file_uploader("Propostas (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
+
+# Processamento
+if st.button("🔍 Analisar Propostas", type="primary") and edital_file and propostas_files:
+    progress_bar = st.progress(0)
+    edital_text = read_file(edital_file)
     
-    if historico:
-        for nome, score, data in historico:
-            st.sidebar.markdown(f"*{nome}*")
-            st.sidebar.caption(f"{score} - {data}")
-            st.sidebar.divider()
-    else:
-        st.sidebar.info("Nenhuma análise registrada ainda")
-except Exception as e:
-    st.sidebar.error(f"Erro ao carregar histórico: {str(e)}")
+    for i, proposta_file in enumerate(propostas_files):
+        try:
+            proposta_text = read_file(proposta_file)
+            prompt = f"""
+            [ANÁLISE TÉCNICA] Compare esta proposta com o edital base:
 
-# Rodapé informativo
+            EDITAL:
+            {edital_text[:10000]}... [continua]
+
+            PROPOSTA ({proposta_file.name}):
+            {proposta_text[:10000]}... [continua]
+
+            Forneça:
+            1. Itens atendidos ✔️
+            2. Itens não atendidos ❌  
+            3. Score (0-100%) 📊
+            4. Recomendações 💡
+            """
+            
+            with st.spinner(f"Analisando {proposta_file.name}..."):
+                analysis, used_model = analyze_with_fallback(prompt, selected_model)
+                
+                with st.container():
+                    st.subheader(f"📝 {proposta_file.name}")
+                    st.markdown(analysis)
+                    generate_pdf_report(proposta_file.name, analysis)
+                    
+            progress_bar.progress((i + 1) / len(propostas_files))
+            
+        except Exception as e:
+            st.error(f"Falha ao analisar {proposta_file.name}: {str(e)}")
+
+# --- Funções Auxiliares ---
+def read_file(file):
+    """Lê PDF ou DOCX com tratamento de erro"""
+    if file.name.endswith(".pdf"):
+        return read_pdf(file)
+    elif file.name.endswith(".docx"):
+        return read_docx(file)
+    else:
+        raise ValueError("Formato não suportado")
+
+def generate_pdf_report(filename, content):
+    """Gera PDF com o resultado"""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, f"Relatório: {filename}\n\n{content}")
+    
+    pdf_bytes = pdf.output(dest="S").encode("latin1")
+    st.download_button(
+        label="⬇️ Baixar Relatório",
+        data=pdf_bytes,
+        file_name=f"relatorio_{filename.split('.')[0]}.pdf",
+        mime="application/pdf"
+    )
+
+# Rodapé
 st.divider()
-st.caption("""
-    ℹ️ Aplicativo desenvolvido para análise técnica de propostas. 
-    Os resultados são gerados por IA e devem ser validados por especialistas.
-""")
+st.caption("ℹ️ Use modelos GPT-4 para análises mais precisas. Configure billing na OpenAI para acesso completo.")
+
+# Monitor de Uso
+if "openai" in services:
+    try:
+        usage = services["openai"].usage.retrieve()
+        st.sidebar.metric("Tokens usados (OpenAI)", f"{usage.total_tokens:,}")
+    except:
+        pass
