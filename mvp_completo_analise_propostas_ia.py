@@ -255,7 +255,7 @@ def main():
                         st.metric("Propostas para Revisar", (df['Recomendacao'] == 'Revisar').sum())
                     
                     # Tabela detalhada
-                    st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn')
+                    st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
                     
                     # Gráfico de barras
                     st.bar_chart(df['Conformidade'])
