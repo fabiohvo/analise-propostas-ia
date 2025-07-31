@@ -63,7 +63,7 @@ except ImportError as e:
     st.stop()
 
 # --- CONSTANTES ---
-MAX_FILE_SIZE_MB = 25
+MAX_FILE_SIZE_MB = 50
 MAX_TOKENS = 100000
 TIMEOUT_ANALISE = 300
 
