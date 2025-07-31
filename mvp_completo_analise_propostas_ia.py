@@ -1,6 +1,6 @@
 """
 ANALISADOR CONTRATUAL AVANÇADO - v2.0.2
-Versão final com correção de binário e diagnóstico
+Versão final com correção do erro bytearray
 """
 
 import streamlit as st
@@ -96,7 +96,7 @@ def ler_arquivo(file):
         raise ValueError(f"Erro ao ler {file.name}: {str(e)}")
 
 def gerar_pdf(conteudo, nome_arquivo):
-    """Gera PDF - Corrigido o erro de binário"""
+    """Gera PDF - CORREÇÃO APLICADA AQUI (única mudança)"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
@@ -110,8 +110,11 @@ def gerar_pdf(conteudo, nome_arquivo):
     
     pdf.multi_cell(0, 8, conteudo)
     
-    # Correção principal: Garante retorno como bytes
-    return pdf.output(dest='S').encode('latin1')
+    # CORREÇÃO DO ERRO: Garante que sempre retorne bytes
+    pdf_output = pdf.output(dest='S')
+    if isinstance(pdf_output, str):
+        return pdf_output.encode('latin1')
+    return pdf_output  # Já está em bytes
 
 def analisar_contrato(contrato_base, proposta, nome_proposta):
     """Lógica de análise contratual - Mantido original"""
