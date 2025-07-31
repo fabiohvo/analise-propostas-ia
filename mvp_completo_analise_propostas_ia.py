@@ -32,14 +32,18 @@ def init_services():
     services = {}
     load_dotenv()
     
-    if os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key"):
+    # Conexão OpenAI (ajustada para versão mais recente)
+    openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+    if openai_key:
         services["openai"] = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"],
+            api_key=openai_key,
             timeout=TIMEOUT_API
         )
     
-    if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"])
+    # Conexão Gemini (mantida igual)
+    gemini_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+    if gemini_key:
+        genai.configure(api_key=gemini_key)
         services["gemini"] = genai
     
     return services
@@ -136,10 +140,10 @@ def analisar_contrato(contrato_base, proposta, nome_proposta):
     
     if "openai" in services:
         try:
-              response = services["openai"].chat.completions.create(
+            response = services["openai"].chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
+                temperature=0.1  # Menor temperatura para mais objetividade
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -255,7 +259,8 @@ def main():
                         st.metric("Propostas para Revisar", (df['Recomendacao'] == 'Revisar').sum())
                     
                     # Tabela detalhada
-                    st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
+                    st.dataframe(df.style
+                                .background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
                     
                     # Gráfico de barras
                     st.bar_chart(df['Conformidade'])
