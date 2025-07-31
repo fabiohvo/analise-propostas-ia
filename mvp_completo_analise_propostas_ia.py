@@ -1,23 +1,21 @@
 """
-ANALISADOR CONTRATUAL VALE - v1.0.1
-Correção do erro 'bytearray' sem perder funcionalidades
+ANALISADOR CONTRATUAL VALE - v1.0.2
+Correção definitiva do erro 'bytearray' object has no attribute 'encode'
 """
 
 import streamlit as st
-import sqlite3
-from datetime import datetime
-import os
-import time
 from pypdf import PdfReader
 import docx2txt
 from openai import OpenAI
 import google.generativeai as genai
 from fpdf import FPDF
 from dotenv import load_dotenv
+import os
+import time
 
 # ================= CONFIGURAÇÃO =================
 st.set_page_config(
-    page_title="Analisador Contratual Vale 1.0.1",
+    page_title="Analisador Contratual Vale 1.0.2",
     page_icon="📑",
     layout="wide"
 )
@@ -38,9 +36,7 @@ def init_services():
         )
     
     if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
-        genai.configure(
-            api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"]
-        )
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"])
         services["gemini"] = genai
     
     return services
@@ -56,22 +52,24 @@ def ler_arquivo(file):
             return "\n".join([page.extract_text() or "" for page in reader.pages[:50]])
         elif file.name.endswith('.docx'):
             return docx2txt.process(file)[:500000]
-        else:
-            raise ValueError("Formato inválido (use PDF ou DOCX)")
+        raise ValueError("Formato inválido (use PDF ou DOCX)")
     except Exception as e:
         raise ValueError(f"Erro ao ler {file.name}: {str(e)}")
 
-def gerar_relatorio_pdf(conteudo):
-    """Gera PDF com tratamento para bytearray"""
+def gerar_pdf(conteudo):
+    """Gera PDF de forma compatível com todas versões do fpdf2"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
     pdf.multi_cell(0, 8, conteudo)
+    
+    # Solução universal para bytearray/string
     pdf_output = pdf.output(dest='S')
-    # Corrige o erro do bytearray
-    return pdf_output if isinstance(pdf_output, bytes) else pdf_output.encode('latin1')
+    if isinstance(pdf_output, str):
+        return pdf_output.encode('latin1')
+    return pdf_output  # Já é bytes
 
-def analisar_contrato_vale(contrato_base, proposta, nome_proposta):
+def analisar_contrato(contrato_base, proposta, nome_proposta):
     """Lógica de análise contratual"""
     services = init_services()
     
@@ -109,7 +107,7 @@ def analisar_contrato_vale(contrato_base, proposta, nome_proposta):
     raise Exception("Todos os serviços de IA falharam (verifique créditos)")
 
 def main():
-    st.title("📑 Analisador Contratual Vale 1.0.1")
+    st.title("📑 Analisador Contratual Vale 1.0.2")
     
     # Upload de documentos
     contrato_base = st.file_uploader("Contrato Base Vale", type=["pdf", "docx"])
@@ -125,13 +123,13 @@ def main():
                 try:
                     with st.spinner(f"Analisando {proposta.name}..."):
                         texto_proposta = ler_arquivo(proposta)
-                        analise = analisar_contrato_vale(texto_base, texto_proposta, proposta.name)
+                        analise = analisar_contrato(texto_base, texto_proposta, proposta.name)
                         
                         with st.expander(f"Resultado: {proposta.name}", expanded=False):
                             st.markdown(analise)
                             
                             # Geração de PDF corrigida
-                            pdf_bytes = gerar_relatorio_pdf(analise)
+                            pdf_bytes = gerar_pdf(analise)
                             st.download_button(
                                 "📥 Baixar Relatório",
                                 data=pdf_bytes,
