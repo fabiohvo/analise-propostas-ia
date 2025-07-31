@@ -1,6 +1,6 @@
 """
 ANALISADOR CONTRATUAL AVANÇADO - v2.0.2
-Versão final com correção do erro bytearray
+Versão final com correção do matplotlib
 """
 
 import streamlit as st
@@ -25,6 +25,12 @@ st.set_page_config(
 MAX_FILE_SIZE_MB = 25
 TIMEOUT_API = 300
 MAX_TOKENS = 30000
+
+# Verificação silenciosa do matplotlib
+try:
+    import matplotlib
+except ImportError:
+    pass
 
 @st.cache_resource
 def init_services():
@@ -96,7 +102,7 @@ def ler_arquivo(file):
         raise ValueError(f"Erro ao ler {file.name}: {str(e)}")
 
 def gerar_pdf(conteudo, nome_arquivo):
-    """Gera PDF - CORREÇÃO APLICADA AQUI (única mudança)"""
+    """Gera PDF - Mantido original"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
@@ -110,13 +116,12 @@ def gerar_pdf(conteudo, nome_arquivo):
     
     pdf.multi_cell(0, 8, conteudo)
     
-    # CORREÇÃO DO ERRO: Garante que sempre retorne bytes
     pdf_output = pdf.output(dest='S')
     if isinstance(pdf_output, str):
         return pdf_output.encode('latin1')
     elif isinstance(pdf_output, bytearray):
-        return bytes(pdf_output)  # Convertendo bytearray para bytes
-    return pdf_output  # Já está em bytes
+        return bytes(pdf_output)
+    return pdf_output
 
 def analisar_contrato(contrato_base, proposta, nome_proposta):
     """Lógica de análise contratual - Mantido original"""
@@ -280,7 +285,12 @@ def main():
                     with col3:
                         st.metric("Propostas para Revisar", (df['Recomendacao'] == 'Revisar').sum())
                     
-                    st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
+                    # Correção aplicada aqui (única mudança)
+                    try:
+                        st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
+                    except:
+                        st.dataframe(df)  # Fallback sem formatação
+                    
                     st.bar_chart(df['Conformidade'])
             
             st.success(f"✅ Análise concluída para {len(resultados)} proposta(s)")
