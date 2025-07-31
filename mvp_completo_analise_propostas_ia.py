@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # Constantes
-MAX_FILE_SIZE_MB = 25
+MAX_FILE_SIZE_MB = 30
 TIMEOUT_ANALISE = 300  # 5 minutos
 
 @st.cache_resource
@@ -74,13 +74,13 @@ def analyze_contract(base_text, proposal_text, proposal_name):
     """Análise com timeout e fallback"""
     services = init_services()
     prompt = f"""
-    [ANÁLISE VALE] Compare esta proposta com o contrato padrão:
+    [ANÁLISE VALE] Compare robustamente esta proposta com o contrato padrão:
 
     CONTRATO BASE:
-    {base_text[:30000]}
+    {base_text[:300000]}
 
     PROPOSTA ({proposal_name}):
-    {proposal_text[:30000]}
+    {proposal_text[:300000]}
 
     Entregue:
     1. Conformidade (0-100%)
@@ -158,5 +158,5 @@ def main():
                 except Exception as e:
                     st.error(f"Erro principal: {str(e)}")
 
-if __name_ == "__main__":
+if __name__ == "__main__":
     main()
