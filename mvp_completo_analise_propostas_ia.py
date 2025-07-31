@@ -1,6 +1,7 @@
 """
-ANALISADOR CONTRATUAL AVANÇADO - v2.0.0
+ANALISADOR CONTRATUAL AVANÇADO - v2.0.1
 Comparação detalhada entre contrato base e múltiplas propostas
+Com sistema de diagnóstico de conexão
 """
 
 import streamlit as st
@@ -17,7 +18,7 @@ from datetime import datetime
 
 # ================= CONFIGURAÇÃO =================
 st.set_page_config(
-    page_title="Analisador Contratual Avançado 2.0.0",
+    page_title="Analisador Contratual Avançado 2.0.1",
     page_icon="📊",
     layout="wide"
 )
@@ -28,23 +29,57 @@ MAX_TOKENS = 30000  # Limite para processamento
 
 @st.cache_resource
 def init_services():
-    """Inicializa conexões com APIs"""
+    """Inicializa conexões com APIs com verificação robusta"""
     services = {}
     load_dotenv()
     
-    # Conexão OpenAI (ajustada para versão mais recente)
-    openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+    # Sistema de diagnóstico
+    diag = {
+        "openai_status": "Não testado",
+        "gemini_status": "Não testado",
+        "erros": []
+    }
+
+    # Conexão OpenAI com verificação
+    openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
     if openai_key:
-        services["openai"] = OpenAI(
-            api_key=openai_key,
-            timeout=TIMEOUT_API
-        )
+        try:
+            client = OpenAI(
+                api_key=openai_key,
+                timeout=TIMEOUT_API
+            )
+            # Teste rápido de conexão
+            client.models.list(timeout=5)  # Timeout reduzido para teste
+            services["openai"] = client
+            diag["openai_status"] = "Conectado ✅"
+        except Exception as e:
+            diag["openai_status"] = "Falhou ❌"
+            diag["erros"].append(f"OpenAI: {str(e)}")
+            st.toast(f"⚠️ OpenAI: {str(e)}", icon="⚠️")
+    else:
+        diag["openai_status"] = "Chave não encontrada"
+        diag["erros"].append("Chave OpenAI não encontrada")
     
-    # Conexão Gemini (mantida igual)
-    gemini_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+    # Conexão Gemini com verificação
+    gemini_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
     if gemini_key:
-        genai.configure(api_key=gemini_key)
-        services["gemini"] = genai
+        try:
+            genai.configure(api_key=gemini_key)
+            # Teste rápido de conexão
+            genai.list_models()  # Chamada simples para verificar conexão
+            services["gemini"] = genai
+            diag["gemini_status"] = "Conectado ✅"
+        except Exception as e:
+            diag["gemini_status"] = "Falhou ❌"
+            diag["erros"].append(f"Gemini: {str(e)}")
+            st.toast(f"⚠️ Gemini: {str(e)}", icon="⚠️")
+    else:
+        diag["gemini_status"] = "Chave não encontrada"
+        diag["erros"].append("Chave Gemini não encontrada")
+    
+    # Mostra diagnóstico no sidebar
+    with st.sidebar.expander("🔍 Diagnóstico de Conexão", expanded=False):
+        st.json(diag)
     
     return services
 
@@ -99,7 +134,7 @@ def gerar_pdf(conteudo, nome_arquivo):
     return pdf_output.encode('latin1') if isinstance(pdf_output, str) else pdf_output
 
 def analisar_contrato(contrato_base, proposta, nome_proposta):
-    """Lógica de análise contratual avançada"""
+    """Lógica de análise contratual com tratamento melhorado"""
     services = init_services()
     
     prompt = f"""
@@ -140,24 +175,37 @@ def analisar_contrato(contrato_base, proposta, nome_proposta):
     
     if "openai" in services:
         try:
+            st.toast("🔌 Conectando ao OpenAI...", icon="⌛")
             response = services["openai"].chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1  # Menor temperatura para mais objetividade
+                temperature=0.1,
+                timeout=30  # Timeout aumentado
             )
             return response.choices[0].message.content
         except Exception as e:
-            st.warning(f"OpenAI falhou: {str(e)}")
+            st.error(f"Erro OpenAI: {str(e)}")
+            st.toast(f"❌ Falha OpenAI: {str(e)}", icon="❌")
     
     if "gemini" in services:
         try:
+            st.toast("🔌 Conectando ao Gemini...", icon="⌛")
             model = genai.GenerativeModel('gemini-1.5-pro')
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
-            st.warning(f"Gemini falhou: {str(e)}")
+            st.error(f"Erro Gemini: {str(e)}")
+            st.toast(f"❌ Falha Gemini: {str(e)}", icon="❌")
     
-    raise Exception("Todos os serviços de IA falharam (verifique créditos)")
+    # Mensagem detalhada de falha
+    st.error("""
+    *Todos os serviços de IA falharam. Verifique:*
+    1. Sua chave OpenAI no sidebar (🔍 Diagnóstico)
+    2. Créditos disponíveis em [OpenAI Usage](https://platform.openai.com/usage)
+    3. Conexão com a internet
+    4. Se o erro persistir, tente reiniciar o app
+    """)
+    return None
 
 def extrair_metricas(analise):
     """Extrai métricas do relatório para dashboard"""
@@ -189,7 +237,7 @@ def extrair_metricas(analise):
         return None
 
 def main():
-    st.title("📊 Analisador Contratual Avançado 2.0.0")
+    st.title("📊 Analisador Contratual Avançado 2.0.1")
     st.markdown("Compare um contrato base com múltiplas propostas comerciais")
     
     # Upload de documentos
@@ -216,6 +264,11 @@ def main():
                     with st.spinner(f"Analisando {proposta.name}..."):
                         texto_proposta = ler_arquivo(proposta)
                         analise = analisar_contrato(texto_base, texto_proposta, proposta.name)
+                        
+                        if analise is None:
+                            st.error(f"Falha na análise de {proposta.name}")
+                            continue
+                            
                         metricas = extrair_metricas(analise)
                         
                         with tab_view:
