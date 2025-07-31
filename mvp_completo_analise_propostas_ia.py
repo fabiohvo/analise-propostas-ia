@@ -136,11 +136,10 @@ def analisar_contrato(contrato_base, proposta, nome_proposta):
     
     if "openai" in services:
         try:
-            response = services["openai"].chat.completions.create(
+             response = services["openai"].chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1  # Menor temperatura para mais objetividade
-            )
+                temperature=0.2)
             return response.choices[0].message.content
         except Exception as e:
             st.warning(f"OpenAI falhou: {str(e)}")
