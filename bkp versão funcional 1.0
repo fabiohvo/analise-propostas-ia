@@ -3,275 +3,160 @@ import sqlite3
 from datetime import datetime
 import os
 import time
-import sys
-import subprocess
-from typing import Tuple, Optional
+from pypdf import PdfReader
+import docx2txt
+from openai import OpenAI
+import google.generativeai as genai
+from fpdf import FPDF
+from dotenv import load_dotenv
 
-# --- CONFIGURAÇÃO DE AMBIENTE À PROVA DE FALHAS ---
-def install_package(package_name: str) -> bool:
-    """Sistema de instalação robusto com múltiplos fallbacks"""
-    try:
-        # Tenta instalar normalmente
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", package_name],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=120
-        )
-        return True
-    except Exception:
-        try:
-            # Fallback 1: Tentar com --user
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--user", package_name],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=120
-            )
-            return True
-        except Exception:
-            try:
-                # Fallback 2: Tentar sem verificação
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "--no-deps", package_name],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=120
-                )
-                return True
-            except Exception:
-                return False
+# Configurações básicas
+st.set_page_config(
+    page_title="Analisador Contratual Vale",
+    page_icon="📑",
+    layout="wide"
+)
 
-# Lista de pacotes prioritários
-PACKAGES = [
-    "pypdf>=3.0.0",  # Principal
-    "PyPDF2>=3.0.0",  # Fallback
-    "pdfminer.six>=20221105",  # Fallback extremo
-    "docx2txt>=0.9",
-    "openai>=1.12.0",
-    "google-generativeai>=0.3.0",
-    "fpdf2>=2.8.3",
-    "python-dotenv>=1.0.0"
-]
+# Constantes
+MAX_FILE_SIZE_MB = 30
+TIMEOUT_ANALISE = 300  # 5 minutos
 
-# Instalação com relatório
-success_count = 0
-for package in PACKAGES:
-    if install_package(package):
-        success_count += 1
-    else:
-        st.warning(f"⚠️ Falha ao instalar: {package.split('>=')[0]}")
-
-if success_count < 5:  # Mínimo de pacotes essenciais
-    st.error("Falha crítica na instalação de dependências")
-    st.stop()
-
-# --- SISTEMA DE IMPORTACOES COM FALLBACK ---
-PDF_READER = None
-try:
-    from pypdf import PdfReader as PDF_READER
-    st.info("✅ Usando pypdf (recomendado)")
-except ImportError:
-    try:
-        from PyPDF2 import PdfReader as PDF_READER
-        st.info("ℹ️ Usando PyPDF2 (fallback)")
-    except ImportError:
-        try:
-            from pdfminer.high_level import extract_text as PDF_READER
-            st.info("ℹ️ Usando pdfminer (fallback avançado)")
-        except ImportError:
-            st.error("❌ Nenhuma biblioteca PDF disponível!")
-            st.stop()
-
-# Outras importações essenciais
-try:
-    import docx2txt
-    from openai import OpenAI
-    import google.generativeai as genai
-    from fpdf import FPDF
-    from dotenv import load_dotenv
-except ImportError as e:
-    st.error(f"❌ Falha em importações essenciais: {str(e)}")
-    st.stop()
-
-# --- CONSTANTES ---
-MAX_FILE_SIZE_MB = 25
-TIMEOUT_ANALISE = 300
-
-class AnalisadorContratos:
-    def _init_(self):
-        self.servicos = self._iniciar_servicos()
+@st.cache_resource
+def init_services():
+    """Inicializa serviços de IA com timeout"""
+    services = {}
+    load_dotenv()
     
-    def _iniciar_servicos(self) -> dict:
-        """Inicialização robusta dos serviços de IA"""
-        servicos = {}
-        load_dotenv()
-        
-        # Configuração OpenAI
-        try:
-            if "OPENAI_API_KEY" in os.environ or "openai" in st.secrets:
-                servicos["openai"] = OpenAI(
-                    api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"],
-                    timeout=TIMEOUT_ANALISE
-                )
-        except Exception as e:
-            st.warning(f"OpenAI não disponível: {str(e)}")
-        
-        # Configuração Gemini
-        try:
-            if "GEMINI_API_KEY" in os.environ or "gemini" in st.secrets:
-                genai.configure(
-                    api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"]
-                )
-                servicos["gemini"] = genai
-        except Exception as e:
-            st.warning(f"Gemini não disponível: {str(e)}")
-        
-        return servicos
-
-def ler_arquivo(file) -> str:
-    """Sistema de leitura de arquivos robusto"""
     try:
-        if not file:
-            raise ValueError("Nenhum arquivo enviado")
-        
-        if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
-        
-        if file.name.endswith('.pdf'):
-            if "extract_text" in str(PDF_READER._name_):
-                return PDF_READER(file)
-            else:
-                reader = PDF_READER(file)
-                return "\n".join([page.extract_text() or "" for page in reader.pages])
-        elif file.name.endswith('.docx'):
-            return docx2txt.process(file)
-        else:
-            raise ValueError("Formato não suportado")
+        # Configura OpenAI
+        if os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key"):
+            services["openai"] = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"],
+                timeout=TIMEOUT_ANALISE
+            )
     except Exception as e:
-        raise ValueError(f"Erro ao ler arquivo: {str(e)}")
+        st.warning(f"OpenAI não disponível: {str(e)}")
+    
+    try:
+        # Configura Gemini
+        if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
+            genai.configure(
+                api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"]
+            )
+            services["gemini"] = genai
+    except Exception as e:
+        st.warning(f"Gemini não disponível: {str(e)}")
+    
+    if not services:
+        st.error("Configure pelo menos uma API no menu Settings > Secrets")
+        st.stop()
+    
+    return services
+
+def read_file(file):
+    """Leitura otimizada de arquivos"""
+    try:
+        if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise ValueError(f"Tamanho máximo: {MAX_FILE_SIZE_MB}MB")
+            
+        if file.name.endswith('.pdf'):
+            reader = PdfReader(file)
+            return "\n".join([page.extract_text() or "" for page in reader.pages][:50])  # Limita a 50 páginas
+            
+        elif file.name.endswith('.docx'):
+            return docx2txt.process(file)[:500000]  # Limita o tamanho
+            
+        raise ValueError("Formato inválido (use PDF ou DOCX)")
+    except Exception as e:
+        raise ValueError(f"Erro ao ler {file.name}: {str(e)}")
+
+def analyze_contract(base_text, proposal_text, proposal_name):
+    """Análise com timeout e fallback"""
+    services = init_services()
+    prompt = f"""
+    [ANÁLISE VALE] Compare robustamente esta proposta com o contrato padrão:
+
+    CONTRATO BASE:
+    {base_text[:300000]}
+
+    PROPOSTA ({proposal_name}):
+    {proposal_text[:300000]}
+
+    Entregue:
+    1. Conformidade (0-100%)
+    2. Itens críticos faltantes
+    3. 3 recomendações específicas
+    """
+    
+    # Tenta OpenAI
+    if "openai" in services:
+        try:
+            response = services["openai"].chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                timeout=30  # Timeout reduzido
+            )
+            return response.choices[0].message.content
+        except:
+            pass
+    
+    # Fallback Gemini
+    if "gemini" in services:
+        try:
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            response = model.generate_content(prompt, request_options={"timeout": 30})
+            return response.text
+        except:
+            pass
+    
+    raise Exception("Todas as APIs falharam")
 
 def main():
-    st.set_page_config(
-        page_title="Analisador Contratual Profissional",
-        page_icon="📑",
-        layout="wide"
-    )
+    st.title("📑 Análise de Propostas Vale")
     
-    st.title("🔍 Sistema de Análise Contratual IA")
-    st.markdown("""
-    *Análise profissional de conformidade entre contratos base e propostas*  
-    Identifica riscos, inconsistências e oportunidades em documentos legais
-    """)
-    
-    with st.expander("📤 UPLOAD DE DOCUMENTOS", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            contrato_base = st.file_uploader(
-                "CONTRATO BASE (PDF/DOCX)",
-                type=["pdf", "docx"],
-                key="contrato"
-            )
-        with col2:
-            propostas = st.file_uploader(
-                "PROPOSTAS (PDF/DOCX)",
-                type=["pdf", "docx"],
-                accept_multiple_files=True,
-                key="propostas"
-            )
-    
-    if st.button("🚀 EXECUTAR ANÁLISE", type="primary") and contrato_base and propostas:
-        try:
-            with st.spinner("🔍 Processando contrato base..."):
-                texto_base = ler_arquivo(contrato_base)
-                if not texto_base:
-                    raise ValueError("Contrato base vazio ou inválido")
-            
-            resultados = []
-            for proposta in propostas:
+    # Upload otimizado
+    with st.form("upload_form"):
+        base_file = st.file_uploader("Contrato Base Vale", type=["pdf", "docx"])
+        prop_files = st.file_uploader("Propostas", type=["pdf", "docx"], accept_multiple_files=True)
+        
+        if st.form_submit_button("Iniciar Análise", type="primary"):
+            if base_file and prop_files:
                 try:
-                    with st.spinner(f"📊 Analisando {proposta.name}..."):
-                        texto_proposta = ler_arquivo(proposta)
-                        analisador = AnalisadorContratos()
-                        
-                        if not analisador.servicos:
-                            raise ValueError("Nenhum serviço de IA disponível")
-                        
-                        prompt = f"""
-                        [ANÁLISE CONTRATUAL PROFISSIONAL]
-                        CONTEXTO: Você é um especialista em contratos de mineração/energia.
-                        
-                        CONTRATO BASE:
-                        {texto_base[:30000]}
-                        
-                        PROPOSTA:
-                        {texto_proposta[:30000]}
-                        
-                        SAÍDA ESPERADA:
-                        1. Conformidade geral (0-100%)
-                        2. Itens críticos atendidos/não atendidos
-                        3. Riscos jurídicos identificados
-                        4. Recomendações específicas
-                        """
-                        
-                        # Tenta OpenAI primeiro
-                        if "openai" in analisador.servicos:
+                    base_text = read_file(base_file)
+                    
+                    for prop in prop_files:
+                        with st.spinner(f"Analisando {prop.name}..."):
                             try:
-                                response = analisador.servicos["openai"].chat.completions.create(
-                                    model="gpt-4-turbo-preview",
-                                    messages=[{"role": "user", "content": prompt}],
-                                    temperature=0.2,
-                                    max_tokens=3000
-                                )
-                                analise = response.choices[0].message.content
-                                resultados.append((proposta.name, analise, "GPT-4 Turbo"))
-                                continue
+                                prop_text = read_file(prop)
+                                analysis = analyze_contract(base_text, prop_text, prop.name)
+                                
+                                with st.expander(f"Resultado: {prop.name}"):
+                                    st.write(analysis)
+                                    
+                                    # PDF seguro
+                                    pdf = FPDF()
+                                    pdf.add_page()
+                                    pdf.set_font("Arial", size=10)
+                                    pdf.multi_cell(0, 8, analysis)
+                                    pdf_bytes = pdf.output(dest='S')
+                                    if isinstance(pdf_bytes, str):
+                                        pdf_bytes = pdf_bytes.encode('latin1')
+                                    
+                                    st.download_button(
+                                        "Baixar Relatório",
+                                        data=pdf_bytes,
+                                        file_name=f"Vale_Analise_{prop.name[:50]}.pdf"
+                                    )
+                            
                             except Exception as e:
-                                st.warning(f"OpenAI falhou: {str(e)}")
-                        
-                        # Fallback para Gemini
-                        if "gemini" in analisador.servicos:
-                            try:
-                                model = genai.GenerativeModel('gemini-1.5-pro-latest')
-                                response = model.generate_content(prompt)
-                                analise = response.text
-                                resultados.append((proposta.name, analise, "Gemini 1.5 Pro"))
+                                st.error(f"Falha em {prop.name}: {str(e)}")
                                 continue
-                            except Exception as e:
-                                st.warning(f"Gemini falhou: {str(e)}")
-                        
-                        raise ValueError("Todos os serviços de IA falharam")
+                    
+                    st.success("Concluído!")
                 
                 except Exception as e:
-                    st.error(f"❌ Falha na análise de {proposta.name}: {str(e)}")
-                    resultados.append((proposta.name, f"Erro: {str(e)}", "Falha"))
-            
-            # Exibe resultados
-            st.success("✅ ANÁLISE CONCLUÍDA!")
-            for nome, analise, modelo in resultados:
-                with st.expander(f"📝 {nome} ({modelo})", expanded=False):
-                    st.markdown(analise)
-                    
-                    # Geração de PDF
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_font("Arial", size=10)
-                    pdf.multi_cell(0, 8, analise)
-                    pdf_bytes = pdf.output(dest="S").encode("latin1")
-                    
-                    st.download_button(
-                        "⬇️ BAIXAR RELATÓRIO",
-                        data=pdf_bytes,
-                        file_name=f"ANALISE_{nome[:50]}.pdf",
-                        mime="application/pdf"
-                    )
-        
-        except Exception as e:
-            st.error(f"❌ ERRO CRÍTICO: {str(e)}")
-            with st.expander("Detalhes técnicos"):
-                st.exception(e)
+                    st.error(f"Erro principal: {str(e)}")
 
 if __name__ == "__main__":
     main()
