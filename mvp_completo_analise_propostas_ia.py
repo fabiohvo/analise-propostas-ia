@@ -114,6 +114,8 @@ def gerar_pdf(conteudo, nome_arquivo):
     pdf_output = pdf.output(dest='S')
     if isinstance(pdf_output, str):
         return pdf_output.encode('latin1')
+    elif isinstance(pdf_output, bytearray):
+        return bytes(pdf_output)  # Convertendo bytearray para bytes
     return pdf_output  # Já está em bytes
 
 def analisar_contrato(contrato_base, proposta, nome_proposta):
