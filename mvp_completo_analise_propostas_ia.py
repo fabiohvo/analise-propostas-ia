@@ -1,6 +1,6 @@
 """
-ANALISADOR CONTRATUAL AVANÇADO - v2.0.0
-Comparação detalhada entre contrato base e múltiplas propostas
+ANALISADOR CONTRATUAL AVANÇADO - v2.0.2
+Versão final com correção de binário e diagnóstico
 """
 
 import streamlit as st
@@ -17,36 +17,58 @@ from datetime import datetime
 
 # ================= CONFIGURAÇÃO =================
 st.set_page_config(
-    page_title="Analisador Contratual Avançado 2.0.0",
+    page_title="Analisador Contratual Avançado 2.0.2",
     page_icon="📊",
     layout="wide"
 )
 
 MAX_FILE_SIZE_MB = 25
 TIMEOUT_API = 300
-MAX_TOKENS = 30000  # Limite para processamento
+MAX_TOKENS = 30000
 
 @st.cache_resource
 def init_services():
-    """Inicializa conexões com APIs - MANTIDO IGUAL AO PRIMEIRO CÓDIGO"""
+    """Inicialização com diagnóstico"""
     services = {}
     load_dotenv()
-    
-    # Configuração IDÊNTICA à versão original que funcionava
-    if os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key"):
-        services["openai"] = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY") or st.secrets["openai"]["api_key"],
-            timeout=TIMEOUT_API
-        )
-    
-    if os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY") or st.secrets["gemini"]["api_key"])
-        services["gemini"] = genai
+    diag = {"status": {}, "erros": []}
+
+    # OpenAI - Mantido igual ao original
+    openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("openai", {}).get("api_key")
+    if openai_key:
+        try:
+            client = OpenAI(api_key=openai_key, timeout=TIMEOUT_API)
+            client.models.list()  # Teste de conexão
+            services["openai"] = client
+            diag["status"]["openai"] = "✅ Conectado"
+        except Exception as e:
+            diag["status"]["openai"] = "❌ Falha"
+            diag["erros"].append(f"OpenAI: {str(e)}")
+    else:
+        diag["status"]["openai"] = "🔍 Chave não encontrada"
+
+    # Gemini - Mantido igual ao original
+    gemini_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key")
+    if gemini_key:
+        try:
+            genai.configure(api_key=gemini_key)
+            genai.list_models()  # Teste de conexão
+            services["gemini"] = genai
+            diag["status"]["gemini"] = "✅ Conectado"
+        except Exception as e:
+            diag["status"]["gemini"] = "❌ Falha"
+            diag["erros"].append(f"Gemini: {str(e)}")
+    else:
+        diag["status"]["gemini"] = "🔍 Chave não encontrada"
+
+    # Mostrar diagnóstico no sidebar
+    with st.sidebar.expander("🔍 Diagnóstico", expanded=False):
+        st.json(diag)
     
     return services
 
 def ler_arquivo(file):
-    """Lê PDF/DOCX com tratamento de erros e extração otimizada"""
+    """Lê PDF/DOCX - Mantido original"""
     try:
         if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
             raise ValueError(f"Arquivo muito grande (limite: {MAX_FILE_SIZE_MB}MB)")
@@ -54,18 +76,16 @@ def ler_arquivo(file):
         if file.name.endswith('.pdf'):
             reader = PdfReader(file)
             text = []
-            for page in reader.pages[:50]:  # Limita a 50 páginas
+            for page in reader.pages[:50]:
                 page_text = page.extract_text() or ""
-                # Remove headers/footers comuns
                 lines = [line for line in page_text.split('\n') 
-                        if not line.strip().isdigit()  # Remove números de página
+                        if not line.strip().isdigit()
                         and not line.lower().startswith('confidential')]
                 text.append('\n'.join(lines))
             return "\n".join(text)[:MAX_TOKENS]
         
         elif file.name.endswith('.docx'):
             text = docx2txt.process(file)
-            # Filtra linhas indesejadas
             lines = [line for line in text.split('\n') 
                     if not line.strip().isdigit()
                     and not line.lower().startswith('confidential')]
@@ -76,27 +96,25 @@ def ler_arquivo(file):
         raise ValueError(f"Erro ao ler {file.name}: {str(e)}")
 
 def gerar_pdf(conteudo, nome_arquivo):
-    """Gera PDF com formatação melhorada"""
+    """Gera PDF - Corrigido o erro de binário"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
     
-    # Adiciona cabeçalho
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, f"Relatório de Análise Contratual", ln=1, align='C')
+    pdf.cell(0, 10, "Relatório de Análise Contratual", ln=1, align='C')
     pdf.set_font("Arial", '', 10)
     pdf.cell(0, 10, f"Arquivo: {nome_arquivo}", ln=1)
     pdf.cell(0, 10, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=1)
     pdf.ln(10)
     
-    # Conteúdo formatado
     pdf.multi_cell(0, 8, conteudo)
     
-    pdf_output = pdf.output(dest='S')
-    return pdf_output.encode('latin1') if isinstance(pdf_output, str) else pdf_output
+    # Correção principal: Garante retorno como bytes
+    return pdf.output(dest='S').encode('latin1')
 
 def analisar_contrato(contrato_base, proposta, nome_proposta):
-    """Lógica de análise contratual avançada"""
+    """Lógica de análise contratual - Mantido original"""
     services = init_services()
     
     prompt = f"""
@@ -154,10 +172,16 @@ def analisar_contrato(contrato_base, proposta, nome_proposta):
         except Exception as e:
             st.warning(f"Gemini falhou: {str(e)}")
     
-    raise Exception("Todos os serviços de IA falharam (verifique créditos)")
+    st.error("""
+    Todos os serviços de IA falharam. Verifique:
+    1. Suas chaves no diagnóstico (sidebar)
+    2. Créditos disponíveis
+    3. Conexão com a internet
+    """)
+    return None
 
 def extrair_metricas(analise):
-    """Extrai métricas do relatório para dashboard"""
+    """Extrai métricas - Mantido original"""
     try:
         metricas = {
             "Conformidade": 0,
@@ -165,17 +189,14 @@ def extrair_metricas(analise):
             "Recomendacao": "Indefinido"
         }
         
-        # Extrai conformidade (ex: "Conformidade geral: 85%")
         if "Conformidade geral:" in analise:
             start = analise.find("Conformidade geral:") + len("Conformidade geral:")
             end = analise.find("%", start)
             if end != -1:
                 metricas["Conformidade"] = int(analise[start:end].strip())
         
-        # Conta itens críticos
-        metricas["Pontos Criticos"] = analise.count("🔴")  # Usando emoji como marcador
+        metricas["Pontos Criticos"] = analise.count("🔴")
         
-        # Extrai recomendação
         for termo in ["Aprovar", "Reprovar", "Revisar"]:
             if termo in analise:
                 metricas["Recomendacao"] = termo
@@ -186,10 +207,9 @@ def extrair_metricas(analise):
         return None
 
 def main():
-    st.title("📊 Analisador Contratual Avançado 2.0.0")
+    st.title("📊 Analisador Contratual Avançado 2.0.2")
     st.markdown("Compare um contrato base com múltiplas propostas comerciais")
     
-    # Upload de documentos
     col1, col2 = st.columns(2)
     with col1:
         contrato_base = st.file_uploader("Contrato Base", type=["pdf", "docx"], key="base")
@@ -202,7 +222,6 @@ def main():
             with st.spinner("Processando contrato base..."):
                 texto_base = ler_arquivo(contrato_base)
             
-            # Área para resultados
             resultados = []
             metricas_gerais = []
             
@@ -213,13 +232,16 @@ def main():
                     with st.spinner(f"Analisando {proposta.name}..."):
                         texto_proposta = ler_arquivo(proposta)
                         analise = analisar_contrato(texto_base, texto_proposta, proposta.name)
+                        
+                        if analise is None:
+                            continue
+                            
                         metricas = extrair_metricas(analise)
                         
                         with tab_view:
                             with st.expander(f"📌 {proposta.name}", expanded=False):
                                 st.markdown(analise)
                                 
-                                # Geração de PDF
                                 pdf_bytes = gerar_pdf(analise, proposta.name)
                                 st.download_button(
                                     "📥 Baixar Relatório Completo",
@@ -238,7 +260,6 @@ def main():
                     st.error(f"Falha na proposta {proposta.name}: {str(e)}")
                     continue
             
-            # Dashboard comparativo
             with tab_dash:
                 if metricas_gerais:
                     df = pd.DataFrame(metricas_gerais)
@@ -246,7 +267,6 @@ def main():
                     
                     st.subheader("Visão Comparativa das Propostas")
                     
-                    # Gráficos
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Melhor Conformidade", f"{df['Conformidade'].max()}%")
@@ -255,11 +275,7 @@ def main():
                     with col3:
                         st.metric("Propostas para Revisar", (df['Recomendacao'] == 'Revisar').sum())
                     
-                    # Tabela detalhada
-                    st.dataframe(df.style
-                                .background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
-                    
-                    # Gráfico de barras
+                    st.dataframe(df.style.background_gradient(subset=['Conformidade'], cmap='RdYlGn'))
                     st.bar_chart(df['Conformidade'])
             
             st.success(f"✅ Análise concluída para {len(resultados)} proposta(s)")
